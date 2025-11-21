@@ -1,0 +1,137 @@
+version: "3.9"
+
+services:
+
+  # -------------------------
+  # 1. SPARK NOTEBOOK
+  # -------------------------
+  spark-notebook:
+    build: .
+    container_name: spark_notebook
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/workspace/notebooks
+      - ./models:/workspace/models
+      - ./data:/workspace/data
+    environment:
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=jupyter
+      - PYSPARK_DRIVER_PYTHON_OPTS=lab --ip=0.0.0.0 --allow-root --no-browser
+      - SPARK_DRIVER_MEMORY=8g
+      - SPARK_EXECUTOR_MEMORY=8g
+
+
+  # -------------------------
+  # 2. FASTAPI WEBSOCKET
+  # -------------------------
+  fastapi_ws:
+    build: ./fast_api_ws
+    container_name: fastapi_ws
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./fast_api_ws:/app
+    depends_on:
+      - bridge
+
+
+  # -------------------------
+  # 3. TCP BRIDGE (WEBSOCKET → TCP)
+  # -------------------------
+  bridge:
+    build: ./Bridge
+    container_name: tcp_bridge
+    ports:
+      - "9999:9999"
+    volumes:
+      - ./Bridge:/app
+
+
+  # -------------------------
+  # 4. SPARK STREAMING
+  # -------------------------
+  spark-streaming:
+    build: ./spark
+    container_name: spark_streaming
+    volumes:
+      - ./models:/workspace/models
+    depends_on:
+      - bridge
+      - postgres
+      - mongo
+
+
+  # -------------------------
+  # 5. POSTGRESQL
+  # -------------------------
+  postgres:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: logisticsdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init_db:/docker-entrypoint-initdb.d
+      - ./postgres_data:/var/lib/postgresql/data
+
+
+  # -------------------------
+  # 6. MONGODB
+  # -------------------------
+  mongo:
+    image: mongo:7
+    container_name: mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./mongo_data:/data/db
+
+
+  # -------------------------
+  # 7. STREAMLIT DASHBOARD
+  # -------------------------
+  streamlit:
+    build: ./streamlit_app
+    container_name: streamlit
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./streamlit_app:/app
+    depends_on:
+      - mongo
+
+
+  # -------------------------
+  # 8. AIRFLOW
+  # -------------------------
+  airflow-webserver:
+    image: apache/airflow:2.9.1
+    container_name: airflow_webserver
+    ports:
+      - "8080:8080"
+    environment:
+      - AIRFLOW__CORE__FERNET_KEY=123456
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    depends_on:
+      - postgres
+    command: webserver
+
+  airflow-scheduler:
+    image: apache/airflow:2.9.1
+    container_name: airflow_scheduler
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    depends_on:
+      - airflow-webserver
+    command: scheduler
