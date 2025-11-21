@@ -6,6 +6,11 @@ from pyspark.sql.types import (
     StructType, StructField,
     StringType, DoubleType, IntegerType, TimestampType
 )
+import psycopg2
+from pymongo import MongoClient
+from pyspark.sql import functions as F
+
+
 import shutil
 checkpoint_dir = "c:/Users/elabi/OneDrive/Desktop/Gestion Logistique/FastApi/checkpoint"
 shutil.rmtree(checkpoint_dir, ignore_errors=True)
@@ -176,6 +181,34 @@ def start_streaming(spark):
                     .save()
                 )
                 print(f"✓ Batch {batch_id} sauvegardé ({count} lignes)")
+                # === AGGREGATION POUR INSIGHTS ===
+                aggregations_df = batch_df.groupBy("Order Region").agg(
+                    F.avg("Sales").alias("avg_sales"),
+                    F.sum("Sales").alias("total_sales"),
+                    F.count("*").alias("count_records"),
+                    F.avg("prediction").alias("avg_prediction")
+                )
+
+                # Convertir en dictionnaires Python
+                agg_results = [row.asDict() for row in aggregations_df.collect()]
+
+                # === SAUVEGARDE DANS MONGODB ===
+
+                try:
+                    mongo = MongoClient("mongodb://localhost:27017/")
+                    mongo_db = mongo["logistics_insights"]
+                    mongo_collection = mongo_db["streaming_aggregations"]
+
+                    # Insérer les résultats
+                    if len(agg_results) > 0:
+                        mongo_collection.insert_many(agg_results)
+                        print(f"✓ Agrégations stockées dans MongoDB : {len(agg_results)} documents")
+                    else:
+                        print("✗ Aucune agrégation à insérer dans MongoDB")
+
+                except Exception as mongo_error:
+                    print(f"ERREUR MongoDB: {mongo_error}")
+
             else:
                 print(f"✗ Batch {batch_id} vide")
         except Exception as e:
